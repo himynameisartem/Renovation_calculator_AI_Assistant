@@ -1,11 +1,15 @@
 from __future__ import annotations
 
+import os
 from pathlib import Path
 import pickle
 
+from dotenv import load_dotenv
 from llama_index.core import Document
 
 from app.embeddings import EmbeddedChunk, OpenAIEmbeddingClient
+
+load_dotenv()
 
 
 INPUT_PATH = Path("data/cleaned/chunks.pkl")
@@ -32,9 +36,15 @@ def main() -> None:
 
     valid_chunks = [chunk for chunk in chunks if (chunk.text or "").strip()]
 
+    use_yandex = bool(os.getenv("YANDEX_API_KEY"))
+
     embedding_client = OpenAIEmbeddingClient(
-        model="text-embedding-3-small",
-        batch_size=100,
+        model=os.getenv("YANDEX_DOC_EMBEDDING_MODEL", "text-embedding-3-small"),
+        batch_size=1 if use_yandex else 100,
+        api_key=os.getenv("YANDEX_API_KEY") or os.getenv("OPENAI_API_KEY"),
+        base_url=os.getenv("YANDEX_BASE_URL"),
+        project=os.getenv("YANDEX_FOLDER_ID"),
+        encoding_format="float" if use_yandex else None,
     )
     vectors = embedding_client.embed_texts(texts)
 
@@ -53,6 +63,8 @@ def main() -> None:
 
     print(f"chunks loaded: {len(chunks)}")
     print(f"embedded chunks: {len(embedded_chunks)}")
+    print(f"embedding model: {embedding_client.model}")
+    print(f"vector size: {len(vectors[0]) if vectors else 0}")
     print(f"saved to: {OUTPUT_PATH}")
 
 

@@ -9,10 +9,11 @@ def main() -> None:
     parser = argparse.ArgumentParser()
     parser.add_argument("question", help="User question for the renovation assistant")
     parser.add_argument("--debug", action="store_true", help="Print routing metadata")
+    parser.add_argument("--fast", action="store_true", help="Use cheaper one-LLM-call RAG mode")
     args = parser.parse_args()
 
     rag = RenovationRAG()
-    result = rag.answer(args.question)
+    result = rag.answer_fast(args.question) if args.fast else rag.answer(args.question)
 
     print(result.answer)
 
