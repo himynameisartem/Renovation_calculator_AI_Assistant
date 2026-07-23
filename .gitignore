@@ -13,3 +13,5 @@ data/raw/
 data/cleaned/
 data/failed/
 data/manifests/
+
+qdrant_storage/

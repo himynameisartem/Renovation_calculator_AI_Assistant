@@ -50,13 +50,16 @@ class QdrantVectorStore:
         self,
         query_vector: list[float],
         limit: int = 5,
+        query_filter: models.Filter | None = None,
     ):
-        return self.client.search(
+        response = self.client.query_points(
             collection_name=self.collection_name,
-            query_vector=query_vector,
+            query=query_vector,
+            query_filter=query_filter,
             limit=limit,
             with_payload=True,
         )
+        return response.points
 
     def _upload_batch(self, chunks: list[EmbeddedChunk]) -> None:
         points: list[models.PointStruct] = []
