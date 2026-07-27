@@ -1,14 +1,19 @@
 from __future__ import annotations
 
+import os
 from pathlib import Path
 import pickle
+
+from dotenv import load_dotenv
 
 from app.embeddings import EmbeddedChunk
 from app.vector_store import QdrantVectorStore
 
+load_dotenv()
+
 
 INPUT_PATH = Path("data/cleaned/embedded_chunks.pkl")
-COLLECTION_NAME = "renovation_docs"
+COLLECTION_NAME = os.getenv("QDRANT_COLLECTION", "renovation_docs")
 
 
 def load_embedded_chunks(input_path: Path) -> list[EmbeddedChunk]:
@@ -26,8 +31,6 @@ def main() -> None:
 
     store = QdrantVectorStore(
         collection_name=COLLECTION_NAME,
-        host="localhost",
-        port=6333,
     )
 
     store.recreate_collection(vector_size=vector_size)
@@ -36,6 +39,7 @@ def main() -> None:
     print(f"embedded_chunks loaded: {len(embedded_chunks)}")
     print(f"vector_size: {vector_size}")
     print(f"collection: {COLLECTION_NAME}")
+    print(f"qdrant_url: {os.getenv('QDRANT_URL') or 'localhost:6333'}")
     print("upload complete")
 
 

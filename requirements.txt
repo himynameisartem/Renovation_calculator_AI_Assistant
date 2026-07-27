@@ -1,8 +1,5 @@
-beautifulsoup4
-requests
-lxml
-llama-index
 openai
 python-dotenv
-tiktoken
 qdrant-client
+fastapi
+uvicorn

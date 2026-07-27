@@ -62,7 +62,7 @@ class RAGAnswer:
 class RenovationRAG:
     def __init__(
         self,
-        collection_name: str = "renovation_docs",
+        collection_name: str | None = None,
         qdrant_host: str = "localhost",
         qdrant_port: int = 6333,
         chat_model: str | None = None,
@@ -75,7 +75,7 @@ class RenovationRAG:
     ) -> None:
         use_yandex = bool(os.getenv("YANDEX_API_KEY"))
 
-        self.collection_name = collection_name
+        self.collection_name = collection_name or os.getenv("QDRANT_COLLECTION", "renovation_docs")
         self.chat_model = (
             chat_model
             or os.getenv("YANDEX_CHAT_MODEL")
@@ -112,7 +112,7 @@ class RenovationRAG:
             encoding_format="float" if use_yandex else None,
         )
         self.vector_store = QdrantVectorStore(
-            collection_name=collection_name,
+            collection_name=self.collection_name,
             host=qdrant_host,
             port=qdrant_port,
         )

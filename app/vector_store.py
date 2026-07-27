@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import hashlib
+import os
 import uuid
 from typing import Iterable
 
@@ -16,9 +17,20 @@ class QdrantVectorStore:
         collection_name: str,
         host: str = "localhost",
         port: int = 6333,
+        url: str | None = None,
+        api_key: str | None = None,
     ) -> None:
         self.collection_name = collection_name
-        self.client = QdrantClient(host=host, port=port)
+        qdrant_url = url or os.getenv("QDRANT_URL")
+        qdrant_api_key = api_key or os.getenv("QDRANT_API_KEY")
+
+        if qdrant_url:
+            self.client = QdrantClient(
+                url=qdrant_url,
+                api_key=qdrant_api_key,
+            )
+        else:
+            self.client = QdrantClient(host=host, port=port)
 
     def recreate_collection(self, vector_size: int) -> None:
         self.client.recreate_collection(
