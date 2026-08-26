@@ -37,6 +37,12 @@ class DocumentChunker:
                 metadata["chunk_index"] = index
                 metadata["chunk_total"] = total_parts
 
+                if metadata.get("document_type") == "estimate":
+                    chunk_text = self._prepend_estimate_context(
+                        text=chunk_text,
+                        metadata=metadata,
+                    )
+
                 chunks.append(
                     Document(
                         text=chunk_text,
@@ -45,3 +51,24 @@ class DocumentChunker:
                 )
 
         return chunks
+
+    def _prepend_estimate_context(self, text: str, metadata: dict) -> str:
+        context_parts = ["Исторический пример реальной сметы"]
+
+        room_name = str(metadata.get("room_name") or "").strip()
+        if room_name:
+            context_parts.append(f"помещение или раздел: {room_name}")
+
+        if metadata.get("estimate_document_type") == "room_summary":
+            context_parts.append("тип документа: итог помещения")
+        else:
+            stage_name = str(metadata.get("stage_name") or "").strip()
+            work_area_name = str(metadata.get("work_area_name") or "").strip()
+
+            if stage_name:
+                context_parts.append(f"этап: {stage_name}")
+            if work_area_name:
+                context_parts.append(f"раздел работ: {work_area_name}")
+
+        prefix = "Контекст: " + "; ".join(context_parts) + "."
+        return f"{prefix}\n\n{text}"

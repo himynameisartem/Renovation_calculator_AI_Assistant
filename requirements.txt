@@ -1,5 +1,11 @@
 openai
+openpyxl
 python-dotenv
 qdrant-client
 fastapi
 uvicorn
+beautifulsoup4
+requests
+lxml
+llama-index
+tiktoken

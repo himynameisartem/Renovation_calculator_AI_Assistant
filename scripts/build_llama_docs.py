@@ -1,14 +1,19 @@
+import os
 from pathlib import Path
 import pickle
 
+from dotenv import load_dotenv
 from llama_index.core import Document
 
+from app.estimate_loader import EstimateLoader
 from app.parser import SiteParser
 from app.pipeline import IngestionPipeline
 from app.pricing_loader import PricingLoader
 
 
 OUTPUT_PATH = Path("data/cleaned/llama_docs.pkl")
+
+load_dotenv()
 
 
 def to_llama_document(doc) -> Document:
@@ -53,13 +58,21 @@ def main() -> None:
     pricing_loader = PricingLoader("https://sk-family.ru/db.json")
     pricing_docs = pricing_loader.load_documents()
 
-    all_docs = website_docs + pricing_docs
+    estimates_dir = os.getenv("ESTIMATES_DIR", "").strip()
+    estimate_docs = (
+        EstimateLoader(estimates_dir).load_documents()
+        if estimates_dir
+        else []
+    )
+
+    all_docs = website_docs + pricing_docs + estimate_docs
     llama_docs = [to_llama_document(doc) for doc in all_docs]
 
     save_llama_docs(llama_docs, OUTPUT_PATH)
 
     print(f"website_docs: {len(website_docs)}")
     print(f"pricing_docs: {len(pricing_docs)}")
+    print(f"estimate_docs: {len(estimate_docs)}")
     print(f"all_docs: {len(all_docs)}")
     print(f"llama_docs saved to: {OUTPUT_PATH}")
 
