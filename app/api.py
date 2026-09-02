@@ -38,7 +38,7 @@ def chat(request: ChatRequest) -> ChatResponse:
     if len(message) > MAX_QUESTION_CHARS:
         raise HTTPException(status_code=400, detail=LONG_QUESTION_MESSAGE)
 
-    result = get_rag().answer_fast(message)
+    result = get_rag().answer(message)
 
     return ChatResponse(
         answer=result.answer,
