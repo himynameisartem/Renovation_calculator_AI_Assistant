@@ -10,6 +10,7 @@ from openai import OpenAI
 from qdrant_client.http import models
 
 from app.embeddings import OpenAIEmbeddingClient
+from app.estimate_calculator import EstimateCalculator, extract_area_m2
 from app.vector_store import QdrantVectorStore
 
 load_dotenv()
@@ -31,7 +32,24 @@ SourceMode = Literal[
     "all",
     "website_only",
     "website_and_estimates",
+    "estimates_only",
     "pricing_only",
+]
+PricingScope = Literal[
+    "whole_renovation",
+    "work_stage",
+    "single_work",
+    "not_applicable",
+]
+WorkStage = Literal[
+    "demolition",
+    "preparation",
+    "rough_finish",
+    "finish",
+    "plumbing",
+    "electrical",
+    "heating",
+    "unknown",
 ]
 MAX_QUESTION_CHARS = 500
 EMPTY_QUESTION_MESSAGE = "Напишите вопрос о ремонте или услугах компании."
@@ -52,6 +70,8 @@ COMPANY_FACTS = """
 class RAGRoute:
     intent: Intent
     rewritten_query: str
+    pricing_scope: PricingScope = "not_applicable"
+    work_stage: WorkStage = "unknown"
     raw: str = ""
 
 
@@ -121,6 +141,7 @@ class RenovationRAG:
             host=qdrant_host,
             port=qdrant_port,
         )
+        self.estimate_calculator = EstimateCalculator()
 
     def answer_fast(self, question: str, top_k: int = 6, top_n: int = 3) -> RAGAnswer:
         validation_error = self.validate_question(question)
@@ -173,7 +194,13 @@ class RenovationRAG:
             context=context,
         )
 
-    def answer(self, question: str, top_k: int = 8, top_n: int = 3) -> RAGAnswer:
+    def answer(
+        self,
+        question: str,
+        top_k: int = 8,
+        top_n: int = 3,
+        history: list[dict[str, str]] | None = None,
+    ) -> RAGAnswer:
         validation_error = self.validate_question(question)
         if validation_error:
             return RAGAnswer(
@@ -185,8 +212,9 @@ class RenovationRAG:
             )
 
         question = self.normalize_question(question)
+        history_text = self.format_history(history)
 
-        route = self.classify_question(question)
+        route = self.classify_question(question, history_text=history_text)
 
         if route.intent == "out_of_scope":
             return RAGAnswer(
@@ -210,29 +238,50 @@ class RenovationRAG:
             )
 
         search_query = route.rewritten_query or question
+        calculated_context = ""
+        if route.pricing_scope == "work_stage":
+            target_area_m2 = extract_area_m2(search_query) or extract_area_m2(question)
+            if target_area_m2 is not None:
+                estimate_range = self.estimate_calculator.calculate(
+                    stage_code=route.work_stage,
+                    target_area_m2=target_area_m2,
+                )
+                if estimate_range is not None:
+                    calculated_context = estimate_range.as_context()
+
         candidates = self.retrieve_candidates(
             query=search_query,
-            source_mode=self.source_mode_for_intent(route.intent),
+            source_mode=self.source_mode_for_route(route),
             top_k=top_k,
         )
 
-        if not candidates:
+        if not candidates and not calculated_context:
             return self._manager_fallback(route, points=[], context="")
 
-        best_points = self.rerank_chunks(
-            question=question,
-            candidates=candidates,
-            top_n=top_n,
-        )
+        best_points = []
+        if candidates:
+            best_points = self.rerank_chunks(
+                question=question,
+                candidates=candidates,
+                top_n=top_n,
+                history_text=history_text,
+            )
 
-        if not best_points:
+        if not best_points and candidates:
             best_points = candidates[:top_n]
 
         context = self.build_context(best_points)
+        if calculated_context:
+            context = (
+                f"{calculated_context}\n\n---\n\n{context}"
+                if context
+                else calculated_context
+            )
         answer = self.generate_answer(
             question=question,
             route=route,
             context=context,
+            history_text=history_text,
         )
 
         return RAGAnswer(
@@ -243,12 +292,12 @@ class RenovationRAG:
             context=context,
         )
 
-    def classify_question(self, question: str) -> RAGRoute:
+    def classify_question(self, question: str, history_text: str = "") -> RAGRoute:
         prompt = f"""
 Определи тип вопроса пользователя для ассистента компании по ремонту квартир.
 
 Верни только JSON без пояснений:
-{{"intent": "...", "rewritten_query": "..."}}
+{{"intent": "...", "pricing_scope": "...", "work_stage": "...", "rewritten_query": "..."}}
 
 Допустимые intent:
 - contacts: пользователь просит телефон, контакты, WhatsApp, Telegram, связь с менеджером, куда написать или оставить заявку.
@@ -262,18 +311,40 @@ class RenovationRAG:
 - general_rag: другой вопрос по ремонту и услугам компании.
 - out_of_scope: вопрос не связан с ремонтом, отделкой, дизайном, ценами, сроками, контактами или услугами компании.
 
+Допустимые pricing_scope:
+- whole_renovation: стоимость всего ремонта объекта или помещения целиком;
+- work_stage: стоимость целого этапа или комплекса однотипных работ по объекту, например всего демонтажа, всей электрики или всей сантехники;
+- single_work: цена одной конкретной операции или позиции;
+- not_applicable: вопрос не требует расчёта стоимости.
+
+Допустимые work_stage:
+- demolition: демонтажные работы;
+- preparation: подготовительные работы;
+- rough_finish: черновые отделочные работы;
+- finish: чистовые отделочные работы;
+- plumbing: сантехнические работы;
+- electrical: электромонтажные работы;
+- heating: отопление;
+- unknown: этап не указан или вопрос не относится к стоимости этапа.
+
 rewritten_query:
 - для поиска перепиши вопрос формально и исправь опечатки;
+- если текущий вопрос ссылается на предыдущие сообщения, восстанови из истории предмет, помещение, площадь и вид работ;
+- rewritten_query должен быть самостоятельным и понятным без истории диалога;
 - сохрани смысл;
 - не добавляй факты;
 - для contacts и out_of_scope можно оставить пустую строку.
 
 Примеры:
-"скок выйдет ремнот аднушки" -> {{"intent":"broad_pricing","rewritten_query":"стоимость ремонта однокомнатной квартиры"}}
-"а вы ванную под ключ делаете или нет" -> {{"intent":"service_confirmation","rewritten_query":"ремонт ванной комнаты под ключ"}}
-"можно без замера хотябы примерно понять цену" -> {{"intent":"remote_estimate","rewritten_query":"предварительная оценка стоимости ремонта без замера"}}
-"сколько стоит демонтаж плитки" -> {{"intent":"specific_pricing","rewritten_query":"стоимость демонтажа плитки"}}
-"объясни квантовую механику" -> {{"intent":"out_of_scope","rewritten_query":""}}
+"скок выйдет ремнот аднушки" -> {{"intent":"broad_pricing","pricing_scope":"whole_renovation","work_stage":"unknown","rewritten_query":"стоимость ремонта однокомнатной квартиры"}}
+"сколько стоит весь демонтаж квартиры" -> {{"intent":"broad_pricing","pricing_scope":"work_stage","work_stage":"demolition","rewritten_query":"стоимость комплекса демонтажных работ по квартире"}}
+"сколько стоит демонтаж плитки" -> {{"intent":"specific_pricing","pricing_scope":"single_work","work_stage":"demolition","rewritten_query":"стоимость демонтажа плитки"}}
+"а вы ванную под ключ делаете или нет" -> {{"intent":"service_confirmation","pricing_scope":"not_applicable","work_stage":"unknown","rewritten_query":"ремонт ванной комнаты под ключ"}}
+"можно без замера хотябы примерно понять цену" -> {{"intent":"remote_estimate","pricing_scope":"whole_renovation","work_stage":"unknown","rewritten_query":"предварительная оценка стоимости ремонта без замера"}}
+"объясни квантовую механику" -> {{"intent":"out_of_scope","pricing_scope":"not_applicable","work_stage":"unknown","rewritten_query":""}}
+
+История текущего диалога:
+{history_text or "История отсутствует."}
 
 Вопрос пользователя:
 {question}
@@ -297,15 +368,30 @@ rewritten_query:
         try:
             data = self._loads_json_object(raw)
         except json.JSONDecodeError:
-            data = {"intent": "general_rag", "rewritten_query": question}
+            data = {
+                "intent": "general_rag",
+                "pricing_scope": "not_applicable",
+                "work_stage": "unknown",
+                "rewritten_query": question,
+            }
 
         intent = str(data.get("intent", "general_rag")).strip()
         if intent not in self.intents():
             intent = "general_rag"
 
+        pricing_scope = str(data.get("pricing_scope", "not_applicable")).strip()
+        if pricing_scope not in self.pricing_scopes():
+            pricing_scope = "not_applicable"
+
+        work_stage = str(data.get("work_stage", "unknown")).strip()
+        if work_stage not in self.work_stages():
+            work_stage = "unknown"
+
         return RAGRoute(
             intent=intent,  # type: ignore[arg-type]
             rewritten_query=str(data.get("rewritten_query", "") or "").strip(),
+            pricing_scope=pricing_scope,  # type: ignore[arg-type]
+            work_stage=work_stage,  # type: ignore[arg-type]
             raw=raw,
         )
 
@@ -338,7 +424,27 @@ rewritten_query:
     def normalize_question(self, question: str) -> str:
         return " ".join((question or "").split()).strip()
 
-    def rerank_chunks(self, question: str, candidates: list, top_n: int = 3) -> list:
+    def format_history(self, history: list[dict[str, str]] | None) -> str:
+        if not history:
+            return ""
+
+        lines: list[str] = []
+        for item in history[-10:]:
+            role = str(item.get("role") or "").strip()
+            content = self.normalize_question(str(item.get("content") or ""))
+            if role not in {"user", "assistant"} or not content:
+                continue
+            speaker = "Пользователь" if role == "user" else "Ассистент"
+            lines.append(f"{speaker}: {content[:MAX_QUESTION_CHARS]}")
+        return "\n".join(lines)
+
+    def rerank_chunks(
+        self,
+        question: str,
+        candidates: list,
+        top_n: int = 3,
+        history_text: str = "",
+    ) -> list:
         items = []
 
         for index, point in enumerate(candidates):
@@ -360,6 +466,9 @@ rewritten_query:
             return []
 
         prompt = f"""
+История текущего диалога:
+{history_text or "История отсутствует."}
+
 Вопрос пользователя:
 {question}
 
@@ -371,6 +480,7 @@ rewritten_query:
 {{"indexes": [0, 1, 2]}}
 
 Правила:
+- точный действующий тариф или цена за м², соответствующие запросу, имеют приоритет и должны быть выбраны;
 - сопоставляй масштаб запроса и примера: квартиру целиком сравнивай с квартирой целиком, помещение с таким же помещением, отдельную работу с такой же работой;
 - не выбирай стоимость отдельного помещения или отдельной операции как основу расчёта для всей квартиры;
 - если пользователь указал площадь и просит общую стоимость, предпочитай несколько сопоставимых примеров, где одновременно указаны исходная площадь и стоимость нужного состава работ;
@@ -414,8 +524,17 @@ rewritten_query:
 
         return selected
 
-    def generate_answer(self, question: str, route: RAGRoute, context: str) -> str:
+    def generate_answer(
+        self,
+        question: str,
+        route: RAGRoute,
+        context: str,
+        history_text: str = "",
+    ) -> str:
         prompt = f"""
+История текущего диалога:
+{history_text or "История отсутствует."}
+
 Вопрос пользователя:
 {question}
 
@@ -425,11 +544,17 @@ rewritten_query:
 Тип вопроса:
 {route.intent}
 
+Масштаб расчёта:
+{route.pricing_scope}
+
+Проверенные факты компании:
+{self.company_facts_for_route(route)}
+
 Найденные данные:
 {context}
 
 Дополнительные правила:
-{self.instructions_for_intent(route.intent)}
+{self.instructions_for_route(route)}
 
 Если пользователь указал площадь и найдены сопоставимые примеры с исходной площадью и стоимостью:
 1. Для каждого примера вычисли стоимость на 1 м².
@@ -439,6 +564,7 @@ rewritten_query:
 5. В ответе не перечисляй внутренние документы и не употребляй выражения «историческая смета» или «в найденных данных».
 
 Ответь коротко, естественно и только по найденным данным.
+Используй историю только для понимания продолжения разговора. Факты, цены и условия бери из найденных данных, а не из прежних ответов ассистента.
 Если найденные данные дают хотя бы частичный полезный ответ, сначала дай этот ответ.
 Если точности не хватает, добавь, что детали лучше уточнить у менеджера.
 """.strip()
@@ -449,7 +575,7 @@ rewritten_query:
                 {"role": "system", "content": self.system_prompt()},
                 {"role": "user", "content": prompt},
             ],
-            max_output_tokens=120,
+            max_output_tokens=150,
             temperature=0,
         )
 
@@ -522,6 +648,16 @@ rewritten_query:
                 ]
             )
 
+        if source_mode == "estimates_only":
+            return models.Filter(
+                must=[
+                    models.FieldCondition(
+                        key="document_type",
+                        match=models.MatchValue(value="estimate"),
+                    )
+                ]
+            )
+
         if source_mode == "website_only":
             return models.Filter(
                 must_not=[
@@ -548,18 +684,21 @@ rewritten_query:
 
         return None
 
-    def source_mode_for_intent(self, intent: Intent) -> SourceMode:
-        if intent == "specific_pricing":
+    def source_mode_for_route(self, route: RAGRoute) -> SourceMode:
+        if route.intent == "specific_pricing":
             return "pricing_only"
 
-        if intent in {
+        if route.pricing_scope == "work_stage":
+            return "estimates_only"
+
+        if route.intent in {
             "remote_estimate",
             "broad_pricing",
             "general_rag",
         }:
             return "website_and_estimates"
 
-        if intent in {
+        if route.intent in {
             "service_area",
             "service_scope",
             "payment_terms",
@@ -569,28 +708,39 @@ rewritten_query:
 
         return "all"
 
-    def instructions_for_intent(self, intent: Intent) -> str:
+    def company_facts_for_route(self, route: RAGRoute) -> str:
+        if route.pricing_scope in {"work_stage", "single_work"}:
+            return (
+                "Общий тариф ремонта от 15 000 ₽/м² относится ко всему ремонту "
+                "и не является ценой отдельного этапа или отдельной работы."
+            )
+        return COMPANY_FACTS
+
+    def instructions_for_route(self, route: RAGRoute) -> str:
         common = "Не упоминай контекст, базу знаний, найденные данные или внутреннюю классификацию."
 
-        if intent == "specific_pricing":
+        if route.intent == "specific_pricing":
             return common + " Используй только точные цены и единицы измерения из найденных данных."
 
-        if intent == "broad_pricing":
-            return common + " Если есть сопоставимые примеры с площадью и стоимостью, пересчитай их на площадь пользователя и назови итоговую вилку. Если площадь не указана, не придумывай метраж. Не используй цены отдельных работ или помещений как цену всего объекта. Не раскрывай пользователю внутренние документы и источники расчёта."
+        if route.intent == "broad_pricing" and route.pricing_scope == "work_stage":
+            return common + " Рассчитывай стоимость этапа только по сопоставимым примерам этого этапа из реальных объектов. Не применяй к этапу общий тариф ремонта за м². Если указана площадь, пересчитай найденные ставки на площадь пользователя и назови ориентировочную вилку."
 
-        if intent == "remote_estimate":
+        if route.intent == "broad_pricing":
+            return common + " Точный действующий тариф за м² используй в первую очередь. Если пользователь указал площадь, рассчитай по нему общий ориентир. Сопоставимые примеры объектов используй как дополнительную вилку, если в них достаточно данных для пересчёта. Если площадь не указана, не придумывай метраж. Не используй цены отдельных работ или помещений как цену всего объекта. Не раскрывай пользователю внутренние документы и источники расчёта."
+
+        if route.intent == "remote_estimate":
             return common + " Если есть сопоставимые примеры с площадью и стоимостью, пересчитай их на площадь пользователя и назови итоговую вилку. Объясни, что точность зависит от состояния помещения и состава работ. Не используй цены отдельных работ или помещений как цену всего объекта. Не раскрывай пользователю внутренние документы и источники расчёта."
 
-        if intent == "service_confirmation":
+        if route.intent == "service_confirmation":
             return common + " Если найденные данные подтверждают такой вид ремонта или близкую услугу, ответь полезно и прямо. Не называй цены. Если явного подтверждения нет, предложи уточнить у менеджера."
 
-        if intent == "service_scope":
+        if route.intent == "service_scope":
             return common + " Не отвечай уверенно да или нет по объектам вне квартир, если это явно не подтверждено. Лучше предложи уточнить у менеджера."
 
-        if intent == "service_area":
+        if route.intent == "service_area":
             return common + " По географии работы отвечай только по явно подтвержденным данным. Если регион не подтвержден, предложи уточнить у менеджера."
 
-        if intent == "payment_terms":
+        if route.intent == "payment_terms":
             return common + " По оплате и рассрочке отвечай только по явно подтвержденным данным. Если условий нет, предложи уточнить у менеджера."
 
         return common
@@ -603,8 +753,8 @@ rewritten_query:
 1. Отвечай только по переданным найденным данным.
 2. Если есть точная цена, срок, гарантия, формат работы или контакт — используй их в ответе.
 3. Если вопрос про стоимость, считай только из явных данных. Не придумывай свои цифры, площади, проценты, сроки или диапазоны.
-4. Если есть цена за м² и пользователь указал площадь, можешь посчитать примерную стоимость.
-5. Если есть цена за м², но площадь не указана, можно сказать только, что стоимость считается от цены за м², без выдуманных площадей.
+4. Используй цену за м² только тогда, когда она относится к тому же масштабу и составу работ, о которых спрашивает пользователь.
+5. Если подходящая цена за м² есть и пользователь указал площадь, можешь посчитать примерную стоимость. Если площадь не указана, не придумывай метраж.
 6. Если услуга, тип объекта, регион, рассрочка, замер, закупка материалов или другой факт не подтвержден явно, не отвечай уверенно "да" или "нет". Вместо этого скажи, что это лучше уточнить у менеджера.
 7. Если информации недостаточно, но найденные данные частично помогают, сначала дай полезную подтвержденную часть ответа, а потом предложи уточнить детали у менеджера.
 8. Если вопрос вообще не связан с ремонтом и услугами компании, коротко скажи, что ты помогаешь только по вопросам ремонта и услуг компании.
@@ -652,6 +802,28 @@ rewritten_query:
             "service_confirmation",
             "general_rag",
             "out_of_scope",
+        }
+
+    @staticmethod
+    def pricing_scopes() -> set[str]:
+        return {
+            "whole_renovation",
+            "work_stage",
+            "single_work",
+            "not_applicable",
+        }
+
+    @staticmethod
+    def work_stages() -> set[str]:
+        return {
+            "demolition",
+            "preparation",
+            "rough_finish",
+            "finish",
+            "plumbing",
+            "electrical",
+            "heating",
+            "unknown",
         }
 
     @staticmethod
