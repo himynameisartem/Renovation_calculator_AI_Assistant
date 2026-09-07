@@ -1,6 +1,0 @@
--r requirements.txt
-beautifulsoup4
-requests
-lxml
-llama-index
-tiktoken
