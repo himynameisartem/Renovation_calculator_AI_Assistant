@@ -118,6 +118,8 @@ iOS / Android application
 │   ├── crawler.py          # Sitemap discovery
 │   ├── parser.py           # HTML parsing and cleaning
 │   ├── pricing_loader.py   # JSON pricing loader
+│   ├── estimate_loader.py  # Excel estimate loader
+│   ├── estimate_calculator.py # Estimate-based calculations
 │   ├── chunker.py          # LlamaIndex document chunking
 │   ├── embeddings.py       # Embedding client
 │   ├── vector_store.py     # Qdrant wrapper
@@ -126,6 +128,7 @@ iOS / Android application
 │   ├── build_llama_docs.py
 │   ├── build_chunks.py
 │   ├── build_embeddings.py
+│   ├── build_estimate_benchmarks.py
 │   ├── upload_to_qdrant.py
 │   ├── ask_rag.py
 │   ├── evaluate_rag.py
@@ -133,13 +136,13 @@ iOS / Android application
 ├── notebooks/
 │   ├── parser_experiments.ipynb
 │   ├── price_loader_experiments.ipynb
+│   ├── estimate_loader_experiment.ipynb
 │   ├── chunks_experiments.ipynb
 │   ├── retrieval_experiments.ipynb
 │   └── rag_experiments.ipynb
 ├── data/
 │   └── cleaned/            # Generated local artifacts, not for public repo
-├── requirements.txt
-└── requirements-dev.txt
+└── requirements.txt
 ```
 
 ### Установка и запуск
@@ -149,7 +152,7 @@ iOS / Android application
 ```bash
 python3 -m venv .venv
 source .venv/bin/activate
-pip install -r requirements-dev.txt
+pip install -r requirements.txt
 ```
 
 Локальный запуск API:
@@ -364,6 +367,8 @@ Core modules:
 │   ├── crawler.py          # Sitemap discovery
 │   ├── parser.py           # HTML parsing and cleaning
 │   ├── pricing_loader.py   # JSON pricing loader
+│   ├── estimate_loader.py  # Excel estimate loader
+│   ├── estimate_calculator.py # Estimate-based calculations
 │   ├── chunker.py          # LlamaIndex document chunking
 │   ├── embeddings.py       # Embedding client
 │   ├── vector_store.py     # Qdrant wrapper
@@ -372,6 +377,7 @@ Core modules:
 │   ├── build_llama_docs.py
 │   ├── build_chunks.py
 │   ├── build_embeddings.py
+│   ├── build_estimate_benchmarks.py
 │   ├── upload_to_qdrant.py
 │   ├── ask_rag.py
 │   ├── evaluate_rag.py
@@ -379,13 +385,13 @@ Core modules:
 ├── notebooks/
 │   ├── parser_experiments.ipynb
 │   ├── price_loader_experiments.ipynb
+│   ├── estimate_loader_experiment.ipynb
 │   ├── chunks_experiments.ipynb
 │   ├── retrieval_experiments.ipynb
 │   └── rag_experiments.ipynb
 ├── data/
 │   └── cleaned/            # Generated local artifacts, not for public repo
-├── requirements.txt
-└── requirements-dev.txt
+└── requirements.txt
 ```
 
 ### Setup and Run
@@ -395,7 +401,7 @@ Create a virtual environment:
 ```bash
 python3 -m venv .venv
 source .venv/bin/activate
-pip install -r requirements-dev.txt
+pip install -r requirements.txt
 ```
 
 Run the local API:
