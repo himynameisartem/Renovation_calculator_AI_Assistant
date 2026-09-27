@@ -27,7 +27,7 @@ class QdrantVectorStore:
         if qdrant_url:
             self.client = QdrantClient(
                 url=qdrant_url,
-                api_key=qdrant_api_key,
+                api_key=qdrant_api_key or None,
             )
         else:
             self.client = QdrantClient(host=host, port=port)
