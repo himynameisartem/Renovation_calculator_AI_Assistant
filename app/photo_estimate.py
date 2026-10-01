@@ -297,6 +297,8 @@ FINISHED_MATERIALS = {
 }
 
 USER_VISIBLE_CONFIDENCE = 0.80
+UNFINISHED_WALL_CONFIDENCE = 0.80
+VERY_CERTAIN_FINISH_CONFIDENCE = 0.97
 
 CONFIDENT_DEMOLITION_ACTIONS = {
     "wallpaper": "снятие обоев",
@@ -325,6 +327,63 @@ ROUGH_FINISH_MATERIALS = {
     "bare_unfinished_floor",
     "bare_unfinished_ceiling",
 }
+
+UNFINISHED_WALL_MATERIALS = {
+    "bare_unfinished_wall",
+    "exposed_drywall",
+    "unfinished_plaster_or_putty",
+}
+
+
+def _apply_unfinished_room_consistency(
+    detections: dict[str, list[dict[str, Any]]],
+) -> None:
+    walls = detections["walls"]
+    unfinished_wall_confidence = max(
+        (
+            item["confidence"]
+            for item in walls
+            if item["material"] in UNFINISHED_WALL_MATERIALS
+        ),
+        default=0.0,
+    )
+    if unfinished_wall_confidence < UNFINISHED_WALL_CONFIDENCE:
+        return
+
+    detections["walls"] = [
+        item
+        for item in walls
+        if item["material"] in UNFINISHED_WALL_MATERIALS
+        or item["confidence"] >= VERY_CERTAIN_FINISH_CONFIDENCE
+    ]
+    for surface, unfinished_material in (
+        ("floor", "bare_unfinished_floor"),
+        ("ceiling", "bare_unfinished_ceiling"),
+    ):
+        very_certain_finishes = [
+            item
+            for item in detections[surface]
+            if item["material"] != unfinished_material
+            and item["confidence"] >= VERY_CERTAIN_FINISH_CONFIDENCE
+        ]
+        if very_certain_finishes:
+            detections[surface] = very_certain_finishes
+            continue
+        existing_unfinished_confidence = max(
+            (
+                item["confidence"]
+                for item in detections[surface]
+                if item["material"] == unfinished_material
+            ),
+            default=0.0,
+        )
+        detections[surface] = [{
+            "material": unfinished_material,
+            "confidence": max(
+                existing_unfinished_confidence,
+                unfinished_wall_confidence,
+            ),
+        }]
 
 
 HIDDEN_WORKS = {
@@ -377,6 +436,7 @@ class PhotoEstimateService:
             raise ValueError("Высота должна быть больше нуля")
 
         detections = _normalized_detections(cv_result)
+        _apply_unfinished_room_consistency(detections)
         detected_items = [
             (surface, item)
             for surface in SURFACE_KEYS
@@ -579,6 +639,8 @@ class PhotoEstimateService:
                 )
             else:
                 lines.append("- Подготовительный демонтаж существующей отделки; объём уточняется после осмотра.")
+        else:
+            lines.append("- Демонтаж существующей отделки по фотографии не требуется.")
         lines.extend([
             "- Подготовка помещения и оснований.",
             "- Черновые отделочные работы.",

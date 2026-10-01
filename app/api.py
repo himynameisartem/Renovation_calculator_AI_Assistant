@@ -10,11 +10,12 @@ from app.rag import LONG_QUESTION_MESSAGE, MAX_QUESTION_CHARS, RenovationRAG
 from app.photo_estimate import PhotoEstimateService
 
 MAX_HISTORY_MESSAGES = 10
+MAX_HISTORY_MESSAGE_CHARS = 8_000
 
 
 class ChatMessage(BaseModel):
     role: Literal["user", "assistant"]
-    content: str = Field(min_length=1, max_length=MAX_QUESTION_CHARS)
+    content: str = Field(min_length=1, max_length=MAX_HISTORY_MESSAGE_CHARS)
 
 
 class ChatRequest(BaseModel):

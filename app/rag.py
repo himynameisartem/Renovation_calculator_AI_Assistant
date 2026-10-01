@@ -52,6 +52,7 @@ WorkStage = Literal[
     "unknown",
 ]
 MAX_QUESTION_CHARS = 500
+PHOTO_OBJECT_CONTEXT_MARKER = "[PHOTO_OBJECT_CONTEXT]"
 EMPTY_QUESTION_MESSAGE = "Напишите вопрос о ремонте или услугах компании."
 LONG_QUESTION_MESSAGE = "Вопрос слишком длинный. Сформулируйте его короче, до 1000 символов."
 
@@ -219,6 +220,7 @@ class RenovationRAG:
 
         question = self.normalize_question(question)
         history_text = self.format_history(history)
+        photo_object_context = self.photo_object_context(history)
 
         route = self.classify_question(question, history_text=history_text)
 
@@ -267,7 +269,7 @@ class RenovationRAG:
             top_k=top_k,
         )
 
-        if not candidates and not calculated_context:
+        if not candidates and not calculated_context and not photo_object_context:
             return self._manager_fallback(route, points=[], context="")
 
         best_points = []
@@ -288,6 +290,16 @@ class RenovationRAG:
                 f"{calculated_context}\n\n---\n\n{context}"
                 if context
                 else calculated_context
+            )
+        if photo_object_context:
+            current_object_context = (
+                "Подтверждённый результат фото-расчёта для текущего объекта:\n"
+                f"{photo_object_context}"
+            )
+            context = (
+                f"{current_object_context}\n\n---\n\n{context}"
+                if context
+                else current_object_context
             )
         answer = self.generate_answer(
             question=question,
@@ -450,6 +462,16 @@ rewritten_query:
             lines.append(f"{speaker}: {content[:MAX_QUESTION_CHARS]}")
         return "\n".join(lines)
 
+    def photo_object_context(self, history: list[dict[str, str]] | None) -> str:
+        if not history:
+            return ""
+        for item in reversed(history[-10:]):
+            content = self.normalize_question(str(item.get("content") or ""))
+            if PHOTO_OBJECT_CONTEXT_MARKER not in content:
+                continue
+            return content.replace(PHOTO_OBJECT_CONTEXT_MARKER, "", 1).strip()[:2_000]
+        return ""
+
     def rerank_chunks(
         self,
         question: str,
@@ -582,7 +604,7 @@ rewritten_query:
 4. Если пользователь прямо спрашивает, входит ли конкретная позиция, подтверждай её включение только по данным самого расчёта.
 
 Ответь коротко, естественно и только по найденным данным.
-Используй историю только для понимания продолжения разговора. Факты, цены и условия бери из найденных данных, а не из прежних ответов ассистента.
+Используй историю для понимания продолжения разговора. Факты, цены и условия бери из найденных данных, а не из обычных прежних ответов ассистента. Подтверждённый результат фото-расчёта текущего объекта в найденных данных считай фактом этого диалога и используй в последующих вопросах про этот объект.
 Если найденные данные дают хотя бы частичный полезный ответ, сначала дай этот ответ.
 Если точности не хватает, добавь, что детали лучше уточнить у менеджера.
 """.strip()
